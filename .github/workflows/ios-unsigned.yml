@@ -1,0 +1,77 @@
+# Free-account distribution path: builds an UNSIGNED IPA on a macOS runner.
+# Download the artifact and sign + install it from Windows with Sideloadly
+# (free Apple ID, app expires after 7 days — re-run Sideloadly on the same
+# IPA to renew, no rebuild needed).
+#
+# Configuration input:
+#   Debug   → dev client with the launcher UI (connects to Metro on your PC)
+#   Release → standalone app with the JS bundle embedded
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        type: choice
+        default: Release
+        options:
+          - Debug
+          - Release
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate native project (prebuild)
+        run: npx expo prebuild -p ios --no-install
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Detect scheme
+        id: scheme
+        working-directory: ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=${WORKSPACE%.xcworkspace}" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned archive
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -workspace "${{ steps.scheme.outputs.workspace }}" \
+            -scheme "${{ steps.scheme.outputs.scheme }}" \
+            -configuration "${{ inputs.configuration }}" \
+            -sdk iphoneos \
+            -archivePath build/app.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p build/Payload
+          cp -r build/app.xcarchive/Products/Applications/*.app build/Payload/
+          cd build
+          zip -qry "app-unsigned-${{ inputs.configuration }}.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa-unsigned-${{ inputs.configuration }}
+          path: ios/build/app-unsigned-${{ inputs.configuration }}.ipa
+          retention-days: 14

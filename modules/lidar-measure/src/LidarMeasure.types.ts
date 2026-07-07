@@ -1,0 +1,73 @@
+import type { StyleProp, ViewStyle } from 'react-native';
+
+export type MeasureMode = 'rearTap' | 'rearCrosshair' | 'front';
+
+export type Confidence = 'low' | 'medium' | 'high';
+
+/** Which measurement source produced a reading. */
+export type MeasureMethod = 'mesh' | 'existingPlane' | 'estimatedPlane' | 'anchor' | 'trueDepth';
+
+export type DistanceEvent = {
+  /** Smoothed distance in meters (rolling median + EMA). */
+  meters: number;
+  /** Unsmoothed distance, for the debug overlay. */
+  rawMeters: number;
+  confidence: Confidence;
+  mode: MeasureMode;
+  method: MeasureMethod;
+  /** ms since epoch */
+  timestamp: number;
+};
+
+export type TrackingState =
+  | 'initializing'
+  | 'normal'
+  | 'limited'
+  | 'notAvailable'
+  | 'frontRunning';
+
+export type TrackingStateEvent = {
+  state: TrackingState;
+  reason?: 'excessiveMotion' | 'insufficientFeatures' | 'relocalizing';
+};
+
+export type MeasureErrorEvent = {
+  code: string;
+  message: string;
+};
+
+export type MeasureResult = {
+  meters: number;
+  confidence: Confidence;
+  anchorId: string;
+  method: MeasureMethod;
+  worldPoint: { x: number; y: number; z: number };
+} | null;
+
+export type SmoothingConfig = {
+  /** Rolling median window size. Default 5. */
+  medianWindow?: number;
+  /** EMA smoothing factor 0–1 (lower = smoother, laggier). Default 0.3. */
+  emaAlpha?: number;
+};
+
+export type LidarMeasureViewProps = {
+  mode: MeasureMode;
+  /** Distance event rate, 1–60. Default 15. */
+  updateHz?: number;
+  smoothing?: SmoothingConfig;
+  /** Render native marker spheres at tapped points. Default true. */
+  showNativeMarkers?: boolean;
+  onDistance?: (event: { nativeEvent: DistanceEvent }) => void;
+  onTrackingState?: (event: { nativeEvent: TrackingStateEvent }) => void;
+  onError?: (event: { nativeEvent: MeasureErrorEvent }) => void;
+  style?: StyleProp<ViewStyle>;
+};
+
+/** Methods callable on the view ref. */
+export type LidarMeasureViewRef = {
+  /** Raycast at view-local coordinates (RN points). Resolves null on a miss. */
+  measureAtPoint(x: number, y: number): Promise<MeasureResult>;
+  clearAnchors(): Promise<void>;
+  removeAnchor(anchorId: string): Promise<void>;
+};
