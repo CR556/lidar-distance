@@ -26,6 +26,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Expo SDK 57's autolinking package requires Swift 6.2 tools, but the
+      # macos-15 image defaults to Xcode 16.4 (Swift 6.1). Select the newest
+      # installed Xcode 26.x (version-sorted so a runner minor-version bump
+      # doesn't break this).
+      - name: Select Xcode 26 (Swift 6.2)
+        run: |
+          set -eo pipefail
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n1)
+          echo "Selecting $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
