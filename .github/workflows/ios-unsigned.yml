@@ -7,7 +7,7 @@
 #   Debug   -> dev client with the launcher UI (connects to Metro on your PC).
 #              Use this first: hot-reload iteration, rarely needs rebuilding.
 #   Release -> standalone app with the JS bundle embedded (runs without a PC).
-name: iOS unsigned IPA
+name: iOS Unsigned IPA
 
 on:
   workflow_dispatch:
