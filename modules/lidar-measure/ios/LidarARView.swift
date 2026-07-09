@@ -11,6 +11,7 @@ class LidarARView: ExpoView {
   let onDistance = EventDispatcher()
   let onTrackingState = EventDispatcher()
   let onError = EventDispatcher()
+  let onProjectedPoints = EventDispatcher()
 
   let arView = ARView(frame: .zero)
   private lazy var rear = RearSessionController(arView: arView, host: self)
@@ -149,6 +150,13 @@ class LidarARView: ExpoView {
       "confidence": confidence,
       "mode": mode,
       "method": method,
+      "timestamp": Date().timeIntervalSince1970 * 1000,
+    ])
+  }
+
+  func dispatchProjectedPoints(points: [[String: Any]]) {
+    onProjectedPoints([
+      "points": points,
       "timestamp": Date().timeIntervalSince1970 * 1000,
     ])
   }

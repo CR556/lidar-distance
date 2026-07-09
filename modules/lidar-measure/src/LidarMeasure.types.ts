@@ -36,6 +36,24 @@ export type MeasureErrorEvent = {
   message: string;
 };
 
+/** One tapped point projected into screen space, refreshed every frame tick. */
+export type ProjectedPoint = {
+  id: string;
+  /** Screen coordinates in RN points. Meaningless when `visible` is false. */
+  x: number;
+  y: number;
+  /** False when the point is behind the camera or unprojectable. */
+  visible: boolean;
+  /** Live distance from the camera to this point, in meters. */
+  cameraMeters: number;
+};
+
+export type ProjectedPointsEvent = {
+  points: ProjectedPoint[];
+  /** ms since epoch */
+  timestamp: number;
+};
+
 export type MeasureResult = {
   meters: number;
   confidence: Confidence;
@@ -61,6 +79,7 @@ export type LidarMeasureViewProps = {
   onDistance?: (event: { nativeEvent: DistanceEvent }) => void;
   onTrackingState?: (event: { nativeEvent: TrackingStateEvent }) => void;
   onError?: (event: { nativeEvent: MeasureErrorEvent }) => void;
+  onProjectedPoints?: (event: { nativeEvent: ProjectedPointsEvent }) => void;
   style?: StyleProp<ViewStyle>;
 };
 

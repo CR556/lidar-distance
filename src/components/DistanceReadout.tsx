@@ -18,6 +18,9 @@ type Props = {
   unit: Unit;
   tracking: TrackingStateEvent;
   onPress: () => void;
+  onLongPress?: () => void;
+  /** When set, replaces the camera-distance value (e.g. perimeter · area). */
+  overrideText?: string | null;
 };
 
 function placeholderText(tracking: TrackingStateEvent): string {
@@ -35,14 +38,25 @@ function placeholderText(tracking: TrackingStateEvent): string {
   }
 }
 
-export function DistanceReadout({ meters, confidence, stale, unit, tracking, onPress }: Props) {
+export function DistanceReadout({
+  meters,
+  confidence,
+  stale,
+  unit,
+  tracking,
+  onPress,
+  onLongPress,
+  overrideText,
+}: Props) {
   const insets = useSafeAreaInsets();
   const showValue = meters !== null && !stale;
 
   return (
     <View style={[styles.container, { top: insets.top + 8 }]} pointerEvents="box-none">
-      <Pressable onPress={onPress} style={styles.pill}>
-        {showValue ? (
+      <Pressable onPress={onPress} onLongPress={onLongPress} style={styles.pill}>
+        {overrideText != null ? (
+          <Text style={styles.override}>{overrideText}</Text>
+        ) : showValue ? (
           <View style={styles.row}>
             <View
               style={[
@@ -94,5 +108,11 @@ const styles = StyleSheet.create({
   placeholder: {
     color: 'rgba(255,255,255,0.8)',
     fontSize: 17,
+  },
+  override: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
 });

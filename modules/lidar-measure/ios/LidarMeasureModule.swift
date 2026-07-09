@@ -21,7 +21,7 @@ public class LidarMeasureModule: Module {
     }
 
     View(LidarARView.self) {
-      Events("onDistance", "onTrackingState", "onError")
+      Events("onDistance", "onTrackingState", "onError", "onProjectedPoints")
 
       Prop("mode") { (view: LidarARView, mode: String) in
         view.setMode(mode)

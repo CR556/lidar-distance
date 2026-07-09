@@ -35,7 +35,7 @@ final class RearSessionController: NSObject, ARSessionDelegate {
   }
 
   private var anchors: [String: AnchorEntity] = [:]
-  private var latestAnchorId: String?
+  private var anchorOrder: [String] = []
   private var lastEventTimestamp: TimeInterval = 0
   private var trackingNormal = false
   private(set) var isRunning = false
@@ -68,7 +68,7 @@ final class RearSessionController: NSObject, ARSessionDelegate {
     arView.session.delegate = self
 
     anchors.removeAll()
-    latestAnchorId = nil
+    anchorOrder.removeAll()
     smoother.reset()
     trackingNormal = false
     lastEventTimestamp = 0
@@ -138,7 +138,7 @@ final class RearSessionController: NSObject, ARSessionDelegate {
     }
     arView.scene.addAnchor(anchor)
     anchors[id] = anchor
-    latestAnchorId = id
+    anchorOrder.append(id)
     smoother.reset()
 
     return [
@@ -159,15 +159,13 @@ final class RearSessionController: NSObject, ARSessionDelegate {
       arView.scene.removeAnchor(anchor)
     }
     anchors.removeAll()
-    latestAnchorId = nil
+    anchorOrder.removeAll()
   }
 
   func removeAnchor(id: String) {
     guard let anchor = anchors.removeValue(forKey: id) else { return }
     arView.scene.removeAnchor(anchor)
-    if latestAnchorId == id {
-      latestAnchorId = anchors.keys.first
-    }
+    anchorOrder.removeAll { $0 == id }
   }
 
   // MARK: - ARSessionDelegate
@@ -176,22 +174,53 @@ final class RearSessionController: NSObject, ARSessionDelegate {
     guard updateHz > 0 else { return }
     guard frame.timestamp - lastEventTimestamp >= 1.0 / updateHz else { return }
     lastEventTimestamp = frame.timestamp
+    guard mode == "rearCrosshair" || mode == "rearTap" else { return }
 
-    switch mode {
-    case "rearCrosshair":
+    // Center-crosshair distance in both rear modes (in tap mode the JS
+    // readout can toggle to it).
+    if arView.bounds.width > 0 {
       let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-      guard arView.bounds.width > 0, let hit = hitTest(at: center) else { return }
-      let raw = distance(to: hit.worldPoint)
-      emitDistance(raw: raw, confidence: hit.confidence, method: hit.method)
-
-    case "rearTap":
-      guard let id = latestAnchorId, let anchor = anchors[id] else { return }
-      let raw = distance(to: anchor.position(relativeTo: nil))
-      emitDistance(raw: raw, confidence: trackingNormal ? "high" : "low", method: "anchor")
-
-    default:
-      break
+      if let hit = hitTest(at: center) {
+        let raw = distance(to: hit.worldPoint)
+        emitDistance(raw: raw, confidence: hit.confidence, method: hit.method)
+      }
     }
+
+    emitProjectedPoints()
+  }
+
+  /// Screen-space projection of every tapped point plus its live distance to
+  /// the camera — the JS overlay draws lines/labels/fill from this.
+  private func emitProjectedPoints() {
+    guard !anchorOrder.isEmpty else {
+      host?.dispatchProjectedPoints(points: [])
+      return
+    }
+    let camPos = cameraPosition
+    let matrix = arView.cameraTransform.matrix
+    // Camera looks down its local -Z axis.
+    let forward = -SIMD3(matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z)
+
+    var points: [[String: Any]] = []
+    points.reserveCapacity(anchorOrder.count)
+    for id in anchorOrder {
+      guard let anchor = anchors[id] else { continue }
+      let position = anchor.position(relativeTo: nil)
+      let meters = Double(simd_length(position - camPos))
+      let inFront = simd_dot(position - camPos, forward) > 0
+      var entry: [String: Any] = ["id": id, "cameraMeters": meters]
+      if inFront, let screen = arView.project(position) {
+        entry["x"] = Double(screen.x)
+        entry["y"] = Double(screen.y)
+        entry["visible"] = true
+      } else {
+        entry["x"] = 0.0
+        entry["y"] = 0.0
+        entry["visible"] = false
+      }
+      points.append(entry)
+    }
+    host?.dispatchProjectedPoints(points: points)
   }
 
   private func emitDistance(raw: Double, confidence: String, method: String) {

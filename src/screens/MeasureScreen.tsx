@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,18 +7,24 @@ import {
   LidarMeasureViewRef,
   MeasureErrorEvent,
   MeasureMode,
+  ProjectedPoint,
+  ProjectedPointsEvent,
   TrackingStateEvent,
 } from '../../modules/lidar-measure';
 import { CrosshairOverlay } from '../components/CrosshairOverlay';
 import { DebugOverlay } from '../components/DebugOverlay';
 import { DistanceReadout } from '../components/DistanceReadout';
 import { ModeSwitcher } from '../components/ModeSwitcher';
+import { Chain, ChainPoint, ShapesOverlay } from '../components/ShapesOverlay';
 import { UnitToggle } from '../components/UnitToggle';
 import { useDistanceFeed } from '../hooks/useDistanceFeed';
 import { useUnits } from '../hooks/useUnits';
+import { formatArea, perimeter, polygonArea } from '../lib/geometry';
+import { formatDistance } from '../lib/units';
 
-const TRIPLE_TAP_WINDOW_MS = 600;
 const TOAST_DURATION_MS = 1800;
+/** Tap within this many points of the first point to snap the shape closed. */
+const SNAP_RADIUS = 32;
 
 type Props = {
   /** Device has TrueDepth but no LiDAR: hide the rear modes. */
@@ -39,10 +45,15 @@ export function MeasureScreen({ frontOnly = false }: Props) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [debugVisible, setDebugVisible] = useState(false);
-  const [hasAnchors, setHasAnchors] = useState(false);
+
+  // Shape measuring state (rearTap mode).
+  const [shapes, setShapes] = useState<Chain[]>([]);
+  const [current, setCurrent] = useState<ChainPoint[]>([]);
+  const [projections, setProjections] = useState<Record<string, ProjectedPoint>>({});
+  // 'shape' = perimeter/area readout; 'camera' = live crosshair distance.
+  const [readoutMode, setReadoutMode] = useState<'shape' | 'camera'>('shape');
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const readoutTaps = useRef<number[]>([]);
 
   useEffect(() => {
     return () => {
@@ -60,7 +71,6 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     (next: MeasureMode) => {
       setMode(next);
       reset();
-      setHasAnchors(false);
       if (next === 'front') {
         showToast('Front sensor range ≈ 0.2–1.2 m');
       }
@@ -81,26 +91,43 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     [showToast]
   );
 
-  // Triple-tap the readout to toggle the debug overlay.
-  const handleReadoutPress = useCallback(() => {
-    const now = Date.now();
-    readoutTaps.current = [...readoutTaps.current, now].filter(
-      (t) => now - t < TRIPLE_TAP_WINDOW_MS
-    );
-    if (readoutTaps.current.length >= 3) {
-      readoutTaps.current = [];
-      setDebugVisible((visible) => !visible);
+  const handleProjectedPoints = useCallback((e: { nativeEvent: ProjectedPointsEvent }) => {
+    const next: Record<string, ProjectedPoint> = {};
+    for (const p of e.nativeEvent.points) {
+      next[p.id] = p;
     }
+    setProjections(next);
+  }, []);
+
+  const closeShape = useCallback(() => {
+    setCurrent((points) => {
+      if (points.length < 3) return points;
+      setShapes((prev) => [...prev, { points, closed: true }]);
+      return [];
+    });
   }, []);
 
   const handleTap = useCallback(
     async (evt: GestureResponderEvent) => {
       if (mode !== 'rearTap') return;
       const { locationX, locationY } = evt.nativeEvent;
+
+      // Snap-close when tapping near the first point of the active chain.
+      if (current.length >= 3) {
+        const first = projections[current[0].id];
+        if (
+          first?.visible &&
+          Math.hypot(locationX - first.x, locationY - first.y) <= SNAP_RADIUS
+        ) {
+          closeShape();
+          return;
+        }
+      }
+
       try {
         const result = await viewRef.current?.measureAtPoint(locationX, locationY);
         if (result) {
-          setHasAnchors(true);
+          setCurrent((prev) => [...prev, { id: result.anchorId, world: result.worldPoint }]);
         } else {
           showToast('No surface found — try again');
         }
@@ -109,14 +136,65 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         setLastError(String(error));
       }
     },
-    [mode, showToast]
+    [mode, current, projections, closeShape, showToast]
   );
+
+  // Undo: remove the last pending point; with none pending, re-open the last
+  // closed shape (its closing line disappears, points become editable again).
+  const handleUndo = useCallback(async () => {
+    if (current.length > 0) {
+      const last = current[current.length - 1];
+      await viewRef.current?.removeAnchor(last.id).catch(() => {});
+      setCurrent((prev) => prev.slice(0, -1));
+    } else if (shapes.length > 0) {
+      const lastShape = shapes[shapes.length - 1];
+      setShapes((prev) => prev.slice(0, -1));
+      setCurrent(lastShape.points);
+    }
+  }, [current, shapes]);
 
   const handleClear = useCallback(async () => {
     await viewRef.current?.clearAnchors().catch(() => {});
-    setHasAnchors(false);
+    setShapes([]);
+    setCurrent([]);
+    setProjections({});
     reset();
   }, [reset]);
+
+  // Top readout content in tap mode ('shape' readout): running perimeter of
+  // the active chain, or `perimeter · area` of the last closed shape.
+  const shapeReadout = useMemo(() => {
+    if (mode !== 'rearTap' || readoutMode !== 'shape') return null;
+    if (current.length >= 2) {
+      return formatDistance(perimeter(current.map((p) => p.world), false), unit);
+    }
+    if (current.length === 0 && shapes.length > 0) {
+      const last = shapes[shapes.length - 1];
+      const worlds = last.points.map((p) => p.world);
+      return `${formatDistance(perimeter(worlds, true), unit)} · ${formatArea(
+        polygonArea(worlds),
+        unit
+      )}`;
+    }
+    return current.length === 1 ? 'Tap the next corner…' : 'Tap to place points…';
+  }, [mode, readoutMode, current, shapes, unit]);
+
+  const handleReadoutPress = useCallback(() => {
+    if (mode === 'rearTap') {
+      setReadoutMode((m) => (m === 'shape' ? 'camera' : 'shape'));
+    }
+  }, [mode]);
+
+  const toggleDebug = useCallback(() => setDebugVisible((v) => !v), []);
+
+  const chainsForOverlay = useMemo<Chain[]>(
+    () => [...shapes, ...(current.length > 0 ? [{ points: current, closed: false }] : [])],
+    [shapes, current]
+  );
+
+  const showCrosshair =
+    mode === 'rearCrosshair' || mode === 'front' || (mode === 'rearTap' && readoutMode === 'camera');
+  const hasAnything = current.length > 0 || shapes.length > 0;
 
   return (
     <View style={styles.container}>
@@ -124,19 +202,29 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         ref={viewRef}
         style={StyleSheet.absoluteFill}
         mode={mode}
-        updateHz={15}
+        updateHz={30}
         smoothing={{ medianWindow: 5, emaAlpha: 0.3 }}
-        showNativeMarkers
+        showNativeMarkers={false}
         onDistance={onDistance}
         onTrackingState={handleTrackingState}
         onError={handleError}
+        onProjectedPoints={handleProjectedPoints}
       />
 
       {mode === 'rearTap' && (
         <Pressable style={StyleSheet.absoluteFill} onPress={handleTap} />
       )}
 
-      {(mode === 'rearCrosshair' || mode === 'front') && <CrosshairOverlay />}
+      {mode !== 'front' && (
+        <ShapesOverlay
+          chains={chainsForOverlay}
+          projections={projections}
+          unit={unit}
+          snapHint={current.length >= 3}
+        />
+      )}
+
+      {showCrosshair && <CrosshairOverlay />}
 
       <DistanceReadout
         meters={event?.meters ?? null}
@@ -145,6 +233,8 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         unit={unit}
         tracking={tracking}
         onPress={handleReadoutPress}
+        onLongPress={toggleDebug}
+        overrideText={shapeReadout}
       />
 
       {debugVisible && <DebugOverlay event={event} tracking={tracking} lastError={lastError} />}
@@ -158,12 +248,26 @@ export function MeasureScreen({ frontOnly = false }: Props) {
       <View style={[styles.bottomBar, { bottom: insets.bottom + 16 }]} pointerEvents="box-none">
         <ModeSwitcher mode={mode} availableModes={availableModes} onChange={changeMode} />
         <UnitToggle unit={unit} onPress={cycleUnit} />
-        {mode === 'rearTap' && hasAnchors && (
-          <Pressable onPress={handleClear} style={styles.clearButton}>
-            <Text style={styles.clearLabel}>Clear</Text>
-          </Pressable>
-        )}
       </View>
+
+      {mode === 'rearTap' && hasAnything && (
+        <View
+          style={[styles.actionBar, { bottom: insets.bottom + 72 }]}
+          pointerEvents="box-none"
+        >
+          <Pressable onPress={handleUndo} style={styles.actionButton}>
+            <Text style={styles.actionLabel}>Undo</Text>
+          </Pressable>
+          {current.length >= 3 && (
+            <Pressable onPress={closeShape} style={styles.actionButton}>
+              <Text style={[styles.actionLabel, styles.closeLabel]}>Close</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={handleClear} style={styles.actionButton}>
+            <Text style={[styles.actionLabel, styles.clearLabel]}>Clear</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -182,16 +286,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  clearButton: {
+  actionBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
+  actionButton: {
     backgroundColor: 'rgba(0,0,0,0.65)',
-    borderRadius: 22,
+    borderRadius: 20,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
+  },
+  actionLabel: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  closeLabel: {
+    color: '#ffd60a',
   },
   clearLabel: {
     color: '#ff9f0a',
-    fontSize: 15,
-    fontWeight: '600',
   },
   toast: {
     position: 'absolute',
