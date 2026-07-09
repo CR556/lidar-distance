@@ -26,6 +26,8 @@ final class RearSessionController: NSObject, ARSessionDelegate {
 
   var updateHz: Double = 15
   var showMarkers = true
+  /// Set while heatmap mode is active; receives sceneDepth at the event rate.
+  var onDepthFrame: ((CVPixelBuffer) -> Void)?
   var mode: String = "rearCrosshair" {
     didSet {
       if mode != oldValue {
@@ -175,10 +177,14 @@ final class RearSessionController: NSObject, ARSessionDelegate {
     guard updateHz > 0 else { return }
     guard frame.timestamp - lastEventTimestamp >= 1.0 / updateHz else { return }
     lastEventTimestamp = frame.timestamp
-    guard mode == "rearCrosshair" || mode == "rearTap" else { return }
+    guard mode == "rearCrosshair" || mode == "rearTap" || mode == "heatmap" else { return }
 
-    // Center-crosshair distance in both rear modes (in tap mode the JS
-    // readout can toggle to it).
+    if mode == "heatmap", let depthMap = frame.sceneDepth?.depthMap {
+      onDepthFrame?(depthMap)
+    }
+
+    // Center-crosshair distance in all rear modes (in tap mode the JS
+    // readout can toggle to it; heatmap shows it under the crosshair).
     if arView.bounds.width > 0 {
       let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
       if let hit = hitTest(at: center) {

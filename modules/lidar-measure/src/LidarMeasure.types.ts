@@ -1,6 +1,6 @@
 import type { StyleProp, ViewStyle } from 'react-native';
 
-export type MeasureMode = 'rearTap' | 'rearCrosshair' | 'front';
+export type MeasureMode = 'rearTap' | 'rearCrosshair' | 'heatmap' | 'front';
 
 export type Confidence = 'low' | 'medium' | 'high';
 
@@ -76,6 +76,14 @@ export type LidarMeasureViewProps = {
   smoothing?: SmoothingConfig;
   /** Render native marker spheres at tapped points. Default true. */
   showNativeMarkers?: boolean;
+  /** Distance range mapped across the heatmap color ramp (meters). */
+  heatmapRange?: { min: number; max: number };
+  /** Heatmap layer opacity over the camera feed, 0–1. Default 0.65. */
+  heatmapOpacity?: number;
+  /** Color ramp stops (hex), near → far. */
+  heatmapColors?: string[];
+  /** Rotation applied to the sensor-orientation depth map. Default 90. */
+  heatmapRotation?: number;
   onDistance?: (event: { nativeEvent: DistanceEvent }) => void;
   onTrackingState?: (event: { nativeEvent: TrackingStateEvent }) => void;
   onError?: (event: { nativeEvent: MeasureErrorEvent }) => void;

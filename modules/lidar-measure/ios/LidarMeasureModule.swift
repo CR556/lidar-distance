@@ -9,6 +9,11 @@ struct SmoothingParams: Record {
   @Field var emaAlpha: Double = 0.3
 }
 
+struct HeatmapRange: Record {
+  @Field var min: Double = 0.3
+  @Field var max: Double = 5.0
+}
+
 public class LidarMeasureModule: Module {
   public func definition() -> ModuleDefinition {
     Name("LidarMeasure")
@@ -94,6 +99,22 @@ public class LidarMeasureModule: Module {
 
       Prop("showNativeMarkers") { (view: LidarARView, show: Bool) in
         view.setShowMarkers(show)
+      }
+
+      Prop("heatmapRange") { (view: LidarARView, range: HeatmapRange) in
+        view.setHeatmapRange(min: range.min, max: range.max)
+      }
+
+      Prop("heatmapOpacity") { (view: LidarARView, opacity: Double) in
+        view.setHeatmapOpacity(opacity)
+      }
+
+      Prop("heatmapColors") { (view: LidarARView, colors: [String]) in
+        view.setHeatmapColors(colors)
+      }
+
+      Prop("heatmapRotation") { (view: LidarARView, degrees: Int) in
+        view.setHeatmapRotation(degrees)
       }
 
       AsyncFunction("measureAtPoint") { (view: LidarARView, x: Double, y: Double) -> [String: Any]? in

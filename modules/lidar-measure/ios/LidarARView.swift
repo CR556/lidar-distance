@@ -16,6 +16,7 @@ class LidarARView: ExpoView {
   let arView = ARView(frame: .zero)
   private lazy var rear = RearSessionController(arView: arView, host: self)
   private lazy var front = FrontDepthController(host: self)
+  private lazy var heatmap = DepthHeatmapRenderer()
 
   private var mode = "rearCrosshair"
   private var isActive = false
@@ -54,6 +55,7 @@ class LidarARView: ExpoView {
   override func layoutSubviews() {
     super.layoutSubviews()
     front.updatePreviewFrame(bounds)
+    heatmap.layer.frame = bounds
   }
 
   @objc private func handleDidEnterBackground() {
@@ -69,7 +71,7 @@ class LidarARView: ExpoView {
   // MARK: - Props
 
   func setMode(_ newMode: String) {
-    guard ["rearTap", "rearCrosshair", "front"].contains(newMode) else {
+    guard ["rearTap", "rearCrosshair", "heatmap", "front"].contains(newMode) else {
       dispatchError(code: "invalid_mode", message: "Unknown mode '\(newMode)'.")
       return
     }
@@ -97,6 +99,23 @@ class LidarARView: ExpoView {
     rear.showMarkers = show
   }
 
+  func setHeatmapRange(min: Double, max: Double) {
+    heatmap.minMeters = Float(min)
+    heatmap.maxMeters = Float(Swift.max(max, min + 0.01))
+  }
+
+  func setHeatmapOpacity(_ opacity: Double) {
+    heatmap.setOpacity(opacity)
+  }
+
+  func setHeatmapColors(_ colors: [String]) {
+    heatmap.setColors(colors)
+  }
+
+  func setHeatmapRotation(_ degrees: Int) {
+    heatmap.rotationDegrees = degrees
+  }
+
   // MARK: - Mode state machine
 
   private func applyMode() {
@@ -104,6 +123,7 @@ class LidarARView: ExpoView {
       if rear.isRunning {
         rear.pause()
       }
+      setHeatmapActive(false)
       arView.isHidden = true
       front.start(in: layer, frame: bounds)
     } else {
@@ -114,6 +134,24 @@ class LidarARView: ExpoView {
       if !rear.isRunning {
         rear.start()
       }
+      setHeatmapActive(mode == "heatmap")
+    }
+  }
+
+  private func setHeatmapActive(_ active: Bool) {
+    if active {
+      if heatmap.layer.superlayer == nil {
+        heatmap.layer.frame = bounds
+        layer.addSublayer(heatmap.layer)
+      }
+      heatmap.layer.isHidden = false
+      rear.onDepthFrame = { [weak self] depthMap in
+        self?.heatmap.update(depthMap: depthMap)
+      }
+    } else {
+      rear.onDepthFrame = nil
+      heatmap.layer.isHidden = true
+      heatmap.layer.contents = nil
     }
   }
 

@@ -1,7 +1,13 @@
+import type { MeasureMode } from '../../modules/lidar-measure';
 import type { Chain } from '../components/ShapesOverlay';
 import { shapeColor } from './colors';
 import { dist3, perimeter, polygonArea } from './geometry';
 import { formatDistance } from './units';
+
+export type CaptureContext = {
+  mode: MeasureMode;
+  heatmap?: { minMeters: number; maxMeters: number };
+};
 
 /**
  * Builds the metadata embedded in captured photos: EXIF UserComment gets the
@@ -9,7 +15,10 @@ import { formatDistance } from './units';
  * summary. Shapes are labeled by their on-screen color; every measurement is
  * recorded in metric AND imperial regardless of the current unit toggle.
  */
-export function buildCaptureMetadata(chains: Chain[]): {
+export function buildCaptureMetadata(
+  chains: Chain[],
+  context?: CaptureContext
+): {
   userComment: string;
   description: string;
 } {
@@ -58,10 +67,27 @@ export function buildCaptureMetadata(chains: Chain[]): {
   const userComment = JSON.stringify({
     app: 'LiDAR Distance',
     capturedAt: new Date().toISOString(),
+    ...(context?.mode ? { mode: context.mode } : {}),
+    ...(context?.heatmap
+      ? {
+          heatmap: {
+            minMeters: context.heatmap.minMeters,
+            maxMeters: context.heatmap.maxMeters,
+            note: 'Colors map near→far across this range; see legend in image.',
+          },
+        }
+      : {}),
     shapes,
   });
 
-  const description = shapes.length
+  const heatmapPrefix = context?.heatmap
+    ? `Depth heatmap ${formatDistance(context.heatmap.minMeters, 'm')}–${formatDistance(
+        context.heatmap.maxMeters,
+        'm'
+      )}. `
+    : '';
+
+  const shapesDescription = shapes.length
     ? shapes
         .map((s) => {
           const parts = [
@@ -77,5 +103,5 @@ export function buildCaptureMetadata(chains: Chain[]): {
         .join('; ')
     : 'LiDAR Distance capture (no shapes in frame)';
 
-  return { userComment, description };
+  return { userComment, description: heatmapPrefix + shapesDescription };
 }

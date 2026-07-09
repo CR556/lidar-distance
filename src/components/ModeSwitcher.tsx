@@ -6,6 +6,7 @@ import type { MeasureMode } from '../../modules/lidar-measure';
 const LABELS: Record<MeasureMode, string> = {
   rearTap: 'Tap',
   rearCrosshair: 'Crosshair',
+  heatmap: 'Depth',
   front: 'Front',
 };
 

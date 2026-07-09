@@ -13,6 +13,7 @@ import {
   TrackingStateEvent,
 } from '../../modules/lidar-measure';
 import { CaptureButton } from '../components/CaptureButton';
+import { HeatmapLegend } from '../components/HeatmapLegend';
 import { CrosshairOverlay } from '../components/CrosshairOverlay';
 import { DebugOverlay } from '../components/DebugOverlay';
 import { DistanceReadout } from '../components/DistanceReadout';
@@ -23,6 +24,12 @@ import { useDistanceFeed } from '../hooks/useDistanceFeed';
 import { useUnits } from '../hooks/useUnits';
 import { buildCaptureMetadata } from '../lib/captureMetadata';
 import { formatArea, perimeter, polygonArea } from '../lib/geometry';
+import {
+  HEATMAP_COLORS,
+  HEATMAP_MAX_METERS,
+  HEATMAP_MIN_METERS,
+  HEATMAP_OPACITY,
+} from '../lib/heatmap';
 import { projectionStore } from '../lib/projectionStore';
 import { formatDistance } from '../lib/units';
 
@@ -41,7 +48,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
 
   const availableModes: MeasureMode[] = frontOnly
     ? ['front']
-    : ['rearTap', 'rearCrosshair', 'front'];
+    : ['rearTap', 'rearCrosshair', 'heatmap', 'front'];
   const [mode, setMode] = useState<MeasureMode>(frontOnly ? 'front' : 'rearCrosshair');
   const { unit, cycleUnit } = useUnits();
   const { event, stale, onDistance, reset } = useDistanceFeed();
@@ -202,7 +209,13 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     setTimeout(() => setFlash(false), 140);
     try {
       const uri = await captureRef(shotRef, { format: 'jpg', quality: 0.9, result: 'tmpfile' });
-      const { userComment, description } = buildCaptureMetadata(chainsForOverlay);
+      const { userComment, description } = buildCaptureMetadata(chainsForOverlay, {
+        mode,
+        heatmap:
+          mode === 'heatmap'
+            ? { minMeters: HEATMAP_MIN_METERS, maxMeters: HEATMAP_MAX_METERS }
+            : undefined,
+      });
       await saveImageToPhotos(uri, userComment, description);
       showToast('Saved to Photos');
     } catch (error) {
@@ -211,10 +224,13 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     } finally {
       setCapturing(false);
     }
-  }, [capturing, chainsForOverlay, showToast]);
+  }, [capturing, chainsForOverlay, mode, showToast]);
 
   const showCrosshair =
-    mode === 'rearCrosshair' || mode === 'front' || (mode === 'rearTap' && readoutMode === 'camera');
+    mode === 'rearCrosshair' ||
+    mode === 'front' ||
+    mode === 'heatmap' ||
+    (mode === 'rearTap' && readoutMode === 'camera');
   const hasAnything = current.length > 0 || shapes.length > 0;
 
   return (
@@ -228,6 +244,9 @@ export function MeasureScreen({ frontOnly = false }: Props) {
           updateHz={30}
           smoothing={{ medianWindow: 5, emaAlpha: 0.3 }}
           showNativeMarkers={false}
+          heatmapRange={{ min: HEATMAP_MIN_METERS, max: HEATMAP_MAX_METERS }}
+          heatmapOpacity={HEATMAP_OPACITY}
+          heatmapColors={HEATMAP_COLORS}
           onDistance={onDistance}
           onTrackingState={handleTrackingState}
           onError={handleError}
@@ -237,6 +256,9 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         {mode !== 'front' && (
           <ShapesOverlay chains={chainsForOverlay} unit={unit} snapHint={current.length >= 3} />
         )}
+
+        {/* Inside the capture container so heatmap photos include their scale. */}
+        {mode === 'heatmap' && <HeatmapLegend unit={unit} />}
       </View>
 
       {mode === 'rearTap' && (
@@ -288,7 +310,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         </View>
       )}
 
-      {mode === 'rearTap' && (
+      {(mode === 'rearTap' || mode === 'heatmap') && (
         <View
           style={[styles.captureBar, { bottom: insets.bottom + 128 }]}
           pointerEvents="box-none"
