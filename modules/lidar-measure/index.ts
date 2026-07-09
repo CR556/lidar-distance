@@ -10,3 +10,11 @@ export function isLidarSupported(): boolean {
 export function isTrueDepthSupported(): boolean {
   return LidarMeasureModule.isTrueDepthSupported();
 }
+
+export function saveImageToPhotos(
+  path: string,
+  userComment: string,
+  imageDescription: string
+): Promise<void> {
+  return LidarMeasureModule.saveImageToPhotos(path, userComment, imageDescription);
+}

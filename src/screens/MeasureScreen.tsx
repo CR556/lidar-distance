@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { captureRef } from 'react-native-view-shot';
 
 import {
   LidarMeasureView,
   LidarMeasureViewRef,
   MeasureErrorEvent,
   MeasureMode,
-  ProjectedPoint,
   ProjectedPointsEvent,
+  saveImageToPhotos,
   TrackingStateEvent,
 } from '../../modules/lidar-measure';
+import { CaptureButton } from '../components/CaptureButton';
 import { CrosshairOverlay } from '../components/CrosshairOverlay';
 import { DebugOverlay } from '../components/DebugOverlay';
 import { DistanceReadout } from '../components/DistanceReadout';
@@ -19,7 +21,9 @@ import { Chain, ChainPoint, ShapesOverlay } from '../components/ShapesOverlay';
 import { UnitToggle } from '../components/UnitToggle';
 import { useDistanceFeed } from '../hooks/useDistanceFeed';
 import { useUnits } from '../hooks/useUnits';
+import { buildCaptureMetadata } from '../lib/captureMetadata';
 import { formatArea, perimeter, polygonArea } from '../lib/geometry';
+import { projectionStore } from '../lib/projectionStore';
 import { formatDistance } from '../lib/units';
 
 const TOAST_DURATION_MS = 1800;
@@ -45,11 +49,14 @@ export function MeasureScreen({ frontOnly = false }: Props) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [debugVisible, setDebugVisible] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const shotRef = useRef<View>(null);
 
-  // Shape measuring state (rearTap mode).
+  // Shape measuring state (rearTap mode). Per-frame projections live in
+  // projectionStore, NOT in state — see that module for why.
   const [shapes, setShapes] = useState<Chain[]>([]);
   const [current, setCurrent] = useState<ChainPoint[]>([]);
-  const [projections, setProjections] = useState<Record<string, ProjectedPoint>>({});
   // 'shape' = perimeter/area readout; 'camera' = live crosshair distance.
   const [readoutMode, setReadoutMode] = useState<'shape' | 'camera'>('shape');
 
@@ -92,11 +99,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
   );
 
   const handleProjectedPoints = useCallback((e: { nativeEvent: ProjectedPointsEvent }) => {
-    const next: Record<string, ProjectedPoint> = {};
-    for (const p of e.nativeEvent.points) {
-      next[p.id] = p;
-    }
-    setProjections(next);
+    projectionStore.set(e.nativeEvent.points);
   }, []);
 
   const closeShape = useCallback(() => {
@@ -114,7 +117,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
 
       // Snap-close when tapping near the first point of the active chain.
       if (current.length >= 3) {
-        const first = projections[current[0].id];
+        const first = projectionStore.get()[current[0].id];
         if (
           first?.visible &&
           Math.hypot(locationX - first.x, locationY - first.y) <= SNAP_RADIUS
@@ -136,7 +139,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         setLastError(String(error));
       }
     },
-    [mode, current, projections, closeShape, showToast]
+    [mode, current, closeShape, showToast]
   );
 
   // Undo: remove the last pending point; with none pending, re-open the last
@@ -157,7 +160,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     await viewRef.current?.clearAnchors().catch(() => {});
     setShapes([]);
     setCurrent([]);
-    setProjections({});
+    projectionStore.clear();
     reset();
   }, [reset]);
 
@@ -192,36 +195,52 @@ export function MeasureScreen({ frontOnly = false }: Props) {
     [shapes, current]
   );
 
+  const handleCapture = useCallback(async () => {
+    if (capturing) return;
+    setCapturing(true);
+    setFlash(true);
+    setTimeout(() => setFlash(false), 140);
+    try {
+      const uri = await captureRef(shotRef, { format: 'jpg', quality: 0.9, result: 'tmpfile' });
+      const { userComment, description } = buildCaptureMetadata(chainsForOverlay);
+      await saveImageToPhotos(uri, userComment, description);
+      showToast('Saved to Photos');
+    } catch (error) {
+      showToast('Capture failed');
+      setLastError(String(error));
+    } finally {
+      setCapturing(false);
+    }
+  }, [capturing, chainsForOverlay, showToast]);
+
   const showCrosshair =
     mode === 'rearCrosshair' || mode === 'front' || (mode === 'rearTap' && readoutMode === 'camera');
   const hasAnything = current.length > 0 || shapes.length > 0;
 
   return (
     <View style={styles.container}>
-      <LidarMeasureView
-        ref={viewRef}
-        style={StyleSheet.absoluteFill}
-        mode={mode}
-        updateHz={30}
-        smoothing={{ medianWindow: 5, emaAlpha: 0.3 }}
-        showNativeMarkers={false}
-        onDistance={onDistance}
-        onTrackingState={handleTrackingState}
-        onError={handleError}
-        onProjectedPoints={handleProjectedPoints}
-      />
+      {/* Everything inside shotRef ends up in captured photos; UI chrome stays outside. */}
+      <View ref={shotRef} style={StyleSheet.absoluteFill} collapsable={false}>
+        <LidarMeasureView
+          ref={viewRef}
+          style={StyleSheet.absoluteFill}
+          mode={mode}
+          updateHz={30}
+          smoothing={{ medianWindow: 5, emaAlpha: 0.3 }}
+          showNativeMarkers={false}
+          onDistance={onDistance}
+          onTrackingState={handleTrackingState}
+          onError={handleError}
+          onProjectedPoints={handleProjectedPoints}
+        />
+
+        {mode !== 'front' && (
+          <ShapesOverlay chains={chainsForOverlay} unit={unit} snapHint={current.length >= 3} />
+        )}
+      </View>
 
       {mode === 'rearTap' && (
         <Pressable style={StyleSheet.absoluteFill} onPress={handleTap} />
-      )}
-
-      {mode !== 'front' && (
-        <ShapesOverlay
-          chains={chainsForOverlay}
-          projections={projections}
-          unit={unit}
-          snapHint={current.length >= 3}
-        />
       )}
 
       {showCrosshair && <CrosshairOverlay />}
@@ -268,6 +287,17 @@ export function MeasureScreen({ frontOnly = false }: Props) {
           </Pressable>
         </View>
       )}
+
+      {mode === 'rearTap' && (
+        <View
+          style={[styles.captureBar, { bottom: insets.bottom + 128 }]}
+          pointerEvents="box-none"
+        >
+          <CaptureButton onPress={handleCapture} disabled={capturing} />
+        </View>
+      )}
+
+      {flash && <View style={styles.flash} pointerEvents="none" />}
     </View>
   );
 }
@@ -294,6 +324,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 10,
+  },
+  captureBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  flash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#fff',
+    opacity: 0.85,
   },
   actionButton: {
     backgroundColor: 'rgba(0,0,0,0.65)',

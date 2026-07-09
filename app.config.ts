@@ -13,6 +13,8 @@ const config: ExpoConfig = {
     infoPlist: {
       NSCameraUsageDescription:
         'The camera and LiDAR sensor are used to measure the distance to objects you point at or tap.',
+      NSPhotoLibraryAddUsageDescription:
+        'Captured measurement photos are saved to your photo library.',
     },
   },
   plugins: ['expo-build-properties'],

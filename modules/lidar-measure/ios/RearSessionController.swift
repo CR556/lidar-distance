@@ -37,6 +37,7 @@ final class RearSessionController: NSObject, ARSessionDelegate {
   private var anchors: [String: AnchorEntity] = [:]
   private var anchorOrder: [String] = []
   private var lastEventTimestamp: TimeInterval = 0
+  private var lastProjectedCount = -1
   private var trackingNormal = false
   private(set) var isRunning = false
 
@@ -193,9 +194,15 @@ final class RearSessionController: NSObject, ARSessionDelegate {
   /// the camera — the JS overlay draws lines/labels/fill from this.
   private func emitProjectedPoints() {
     guard !anchorOrder.isEmpty else {
-      host?.dispatchProjectedPoints(points: [])
+      // Emit the empty set once (so JS clears the overlay), then stay quiet
+      // instead of spamming the bridge 30×/s with nothing.
+      if lastProjectedCount != 0 {
+        host?.dispatchProjectedPoints(points: [])
+        lastProjectedCount = 0
+      }
       return
     }
+    lastProjectedCount = anchorOrder.count
     let camPos = cameraPosition
     let matrix = arView.cameraTransform.matrix
     // Camera looks down its local -Z axis.

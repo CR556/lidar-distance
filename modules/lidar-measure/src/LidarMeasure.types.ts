@@ -89,4 +89,6 @@ export type LidarMeasureViewRef = {
   measureAtPoint(x: number, y: number): Promise<MeasureResult>;
   clearAnchors(): Promise<void>;
   removeAnchor(anchorId: string): Promise<void>;
+  /** Fallback capture: RealityKit snapshot of the AR view (no JS overlay). Resolves a tmp file path. */
+  snapshotCamera(): Promise<string>;
 };

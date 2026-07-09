@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { StyleSheet } from 'react-native';
 import Svg, { Circle, Line, Polygon, Text as SvgText } from 'react-native-svg';
 
-import type { ProjectedPoint } from '../../modules/lidar-measure';
 import { dist3, formatArea, polygonArea, Vec3 } from '../lib/geometry';
+import { shapeColor } from '../lib/colors';
+import { projectionStore } from '../lib/projectionStore';
 import { formatDistance, Unit } from '../lib/units';
 
 export type ChainPoint = { id: string; world: Vec3 };
@@ -12,15 +13,10 @@ export type Chain = { points: ChainPoint[]; closed: boolean };
 type Props = {
   /** Completed shapes plus the in-progress chain (closed: false) last. */
   chains: Chain[];
-  /** Latest screen-space projections keyed by anchor id. */
-  projections: Record<string, ProjectedPoint>;
   unit: Unit;
   /** Highlight the first point of the active chain as a snap target. */
   snapHint: boolean;
 };
-
-const LINE_COLOR = '#ffd60a';
-const FILL_COLOR = 'rgba(255, 214, 10, 0.22)';
 
 /** White text with a dark halo so labels stay readable over any camera feed. */
 function HaloText({
@@ -55,7 +51,13 @@ function HaloText({
   );
 }
 
-export function ShapesOverlay({ chains, projections, unit, snapHint }: Props) {
+/**
+ * Subscribes directly to the 30 Hz projection store so per-frame updates
+ * re-render only this SVG layer — never the parent screen.
+ */
+export function ShapesOverlay({ chains, unit, snapHint }: Props) {
+  const projections = useSyncExternalStore(projectionStore.subscribe, projectionStore.get);
+
   const lines: React.ReactNode[] = [];
   const fills: React.ReactNode[] = [];
   const labels: React.ReactNode[] = [];
@@ -64,6 +66,7 @@ export function ShapesOverlay({ chains, projections, unit, snapHint }: Props) {
   chains.forEach((chain, chainIndex) => {
     const projected = chain.points.map((p) => projections[p.id]);
     const isActive = chainIndex === chains.length - 1 && !chain.closed;
+    const color = shapeColor(chainIndex);
 
     // Segment lines + length labels.
     const segmentCount = chain.closed ? chain.points.length : chain.points.length - 1;
@@ -79,7 +82,7 @@ export function ShapesOverlay({ chains, projections, unit, snapHint }: Props) {
           y1={a.y}
           x2={b.x}
           y2={b.y}
-          stroke={LINE_COLOR}
+          stroke={color.line}
           strokeWidth={2}
         />
       );
@@ -104,7 +107,7 @@ export function ShapesOverlay({ chains, projections, unit, snapHint }: Props) {
           <Polygon
             key={`f-${chainIndex}`}
             points={projected.map((p) => `${p.x},${p.y}`).join(' ')}
-            fill={FILL_COLOR}
+            fill={color.fill}
             stroke="none"
           />
         );
@@ -130,8 +133,8 @@ export function ShapesOverlay({ chains, projections, unit, snapHint }: Props) {
           cx={p.x}
           cy={p.y}
           r={isSnapTarget ? 9 : 5}
-          fill={isSnapTarget ? 'rgba(255,214,10,0.35)' : '#fff'}
-          stroke={isSnapTarget ? LINE_COLOR : 'rgba(0,0,0,0.7)'}
+          fill={isSnapTarget ? color.fill : '#fff'}
+          stroke={isSnapTarget ? color.line : 'rgba(0,0,0,0.7)'}
           strokeWidth={2}
         />
       );

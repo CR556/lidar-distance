@@ -1,6 +1,8 @@
 import ARKit
 import AVFoundation
 import ExpoModulesCore
+import ImageIO
+import Photos
 
 struct SmoothingParams: Record {
   @Field var medianWindow: Int = 5
@@ -18,6 +20,61 @@ public class LidarMeasureModule: Module {
 
     Function("isTrueDepthSupported") { () -> Bool in
       AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) != nil
+    }
+
+    /// Embeds measurement metadata into the image's EXIF (UserComment) and
+    /// TIFF (ImageDescription) fields, then saves it to the camera roll.
+    AsyncFunction("saveImageToPhotos") { (path: String, userComment: String, imageDescription: String, promise: Promise) in
+      let sourceURL: URL
+      if path.hasPrefix("file://"), let parsed = URL(string: path) {
+        sourceURL = parsed
+      } else {
+        sourceURL = URL(fileURLWithPath: path)
+      }
+
+      guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+            let sourceType = CGImageSourceGetType(source) else {
+        promise.reject("capture_read_failed", "Could not read the captured image.")
+        return
+      }
+
+      let outputURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("jpg")
+      guard let destination = CGImageDestinationCreateWithURL(outputURL as CFURL, sourceType, 1, nil) else {
+        promise.reject("capture_write_failed", "Could not create the output image.")
+        return
+      }
+
+      var properties = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]) ?? [:]
+      var exif = (properties[kCGImagePropertyExifDictionary] as? [CFString: Any]) ?? [:]
+      exif[kCGImagePropertyExifUserComment] = userComment
+      properties[kCGImagePropertyExifDictionary] = exif
+      var tiff = (properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]) ?? [:]
+      tiff[kCGImagePropertyTIFFImageDescription] = imageDescription
+      properties[kCGImagePropertyTIFFDictionary] = tiff
+
+      CGImageDestinationAddImageFromSource(destination, source, 0, properties as CFDictionary)
+      guard CGImageDestinationFinalize(destination) else {
+        promise.reject("capture_write_failed", "Could not write image metadata.")
+        return
+      }
+
+      PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        guard status == .authorized || status == .limited else {
+          promise.reject("photos_permission_denied", "Allow photo additions in Settings to save captures.")
+          return
+        }
+        PHPhotoLibrary.shared().performChanges({
+          PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: outputURL, options: nil)
+        }) { success, error in
+          if success {
+            promise.resolve(nil)
+          } else {
+            promise.reject("photos_save_failed", error?.localizedDescription ?? "Unknown Photos error.")
+          }
+        }
+      }
     }
 
     View(LidarARView.self) {
@@ -45,6 +102,13 @@ public class LidarMeasureModule: Module {
 
       AsyncFunction("clearAnchors") { (view: LidarARView) in
         view.clearAnchors()
+      }.runOnQueue(.main)
+
+      // Fallback capture path: RealityKit's own snapshot of the AR view
+      // (camera + markers, no JS overlay). Used if view-shot renders the
+      // Metal-backed camera view black.
+      AsyncFunction("snapshotCamera") { (view: LidarARView, promise: Promise) in
+        view.snapshotCamera(promise: promise)
       }.runOnQueue(.main)
 
       AsyncFunction("removeAnchor") { (view: LidarARView, anchorId: String) in

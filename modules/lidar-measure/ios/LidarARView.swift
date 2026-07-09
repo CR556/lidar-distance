@@ -133,6 +133,24 @@ class LidarARView: ExpoView {
     return rear.measure(at: CGPoint(x: x, y: y))
   }
 
+  func snapshotCamera(promise: Promise) {
+    arView.snapshot(saveToHDR: false) { image in
+      guard let image, let data = image.jpegData(compressionQuality: 0.9) else {
+        promise.reject("snapshot_failed", "Could not capture the camera view.")
+        return
+      }
+      let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("jpg")
+      do {
+        try data.write(to: url)
+        promise.resolve(url.path)
+      } catch {
+        promise.reject("snapshot_failed", error.localizedDescription)
+      }
+    }
+  }
+
   func clearAnchors() {
     rear.clearAnchors()
   }
