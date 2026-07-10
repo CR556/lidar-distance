@@ -18,6 +18,22 @@ final class DepthHeatmapRenderer {
   /// JS-tunable so an orientation surprise never costs a native rebuild.
   var rotationDegrees: Int = 90
 
+  /// Auto mode: the far end of the ramp tracks the furthest visible object
+  /// (99th-percentile depth, smoothed) instead of `maxMeters`.
+  var autoRange = false {
+    didSet {
+      if autoRange != oldValue {
+        smoothedAutoMax = -1
+        lastReportedMax = -1
+      }
+    }
+  }
+  /// Invoked on the main queue when the smoothed auto max moves meaningfully.
+  var onAutoMaxChanged: ((Float) -> Void)?
+
+  private var smoothedAutoMax: Float = -1
+  private var lastReportedMax: Float = -1
+
   private var lut: [UInt8] = [] // 256 RGBA entries
   private let queue = DispatchQueue(label: "lidarmeasure.heatmap")
   private var busy = false
@@ -73,17 +89,21 @@ final class DepthHeatmapRenderer {
     // them and this holds one for <1 ms.
     queue.async { [weak self] in
       guard let self else { return }
-      let image = self.colorize(depthMap: depthMap)
+      let result = self.colorize(depthMap: depthMap)
       DispatchQueue.main.async {
-        if let image {
-          self.layer.contents = image
+        if let result {
+          self.layer.contents = result.image
+          if self.autoRange, abs(result.effectiveMax - self.lastReportedMax) > 0.05 {
+            self.lastReportedMax = result.effectiveMax
+            self.onAutoMaxChanged?(result.effectiveMax)
+          }
         }
         self.busy = false
       }
     }
   }
 
-  private func colorize(depthMap: CVPixelBuffer) -> CGImage? {
+  private func colorize(depthMap: CVPixelBuffer) -> (image: CGImage, effectiveMax: Float)? {
     guard !lut.isEmpty else { return nil }
     CVPixelBufferLockBaseAddress(depthMap, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
@@ -99,8 +119,43 @@ final class DepthHeatmapRenderer {
     let dstW = swap ? srcH : srcW
     let dstH = swap ? srcW : srcH
 
+    // Auto range: 99th-percentile depth via histogram (robust to hot pixels),
+    // EMA-smoothed so the legend doesn't flicker frame to frame.
+    var effectiveMax = maxMeters
+    if autoRange {
+      let binCount = 128
+      let histogramCeiling: Float = 10.0
+      var histogram = [Int](repeating: 0, count: binCount)
+      var validCount = 0
+      for sy in 0..<srcH {
+        for sx in 0..<srcW {
+          let depth = src[sy * rowFloats + sx]
+          guard depth.isFinite, depth > 0 else { continue }
+          let bin = min(binCount - 1, Int(depth / histogramCeiling * Float(binCount)))
+          histogram[bin] += 1
+          validCount += 1
+        }
+      }
+      if validCount > 100 {
+        let cutoff = validCount / 100 // drop the farthest 1%
+        var seen = 0
+        var p99 = histogramCeiling
+        for bin in stride(from: binCount - 1, through: 0, by: -1) {
+          seen += histogram[bin]
+          if seen >= cutoff {
+            p99 = Float(bin + 1) / Float(binCount) * histogramCeiling
+            break
+          }
+        }
+        smoothedAutoMax = smoothedAutoMax < 0 ? p99 : smoothedAutoMax + 0.25 * (p99 - smoothedAutoMax)
+      }
+      if smoothedAutoMax > 0 {
+        effectiveMax = max(smoothedAutoMax, minMeters + 0.5)
+      }
+    }
+
     var pixels = [UInt8](repeating: 0, count: dstW * dstH * 4)
-    let range = max(maxMeters - minMeters, 0.001)
+    let range = max(effectiveMax - minMeters, 0.001)
 
     for y in 0..<dstH {
       for x in 0..<dstW {
@@ -134,7 +189,7 @@ final class DepthHeatmapRenderer {
 
     let data = Data(pixels)
     guard let provider = CGDataProvider(data: data as CFData) else { return nil }
-    return CGImage(
+    guard let image = CGImage(
       width: dstW,
       height: dstH,
       bitsPerComponent: 8,
@@ -146,6 +201,7 @@ final class DepthHeatmapRenderer {
       decode: nil,
       shouldInterpolate: true,
       intent: .defaultIntent
-    )
+    ) else { return nil }
+    return (image, effectiveMax)
   }
 }

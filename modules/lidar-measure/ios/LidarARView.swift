@@ -12,6 +12,7 @@ class LidarARView: ExpoView {
   let onTrackingState = EventDispatcher()
   let onError = EventDispatcher()
   let onProjectedPoints = EventDispatcher()
+  let onHeatmapRange = EventDispatcher()
 
   let arView = ARView(frame: .zero)
   private lazy var rear = RearSessionController(arView: arView, host: self)
@@ -116,6 +117,10 @@ class LidarARView: ExpoView {
     heatmap.rotationDegrees = degrees
   }
 
+  func setHeatmapAutoRange(_ enabled: Bool) {
+    heatmap.autoRange = enabled
+  }
+
   // MARK: - Mode state machine
 
   private func applyMode() {
@@ -145,6 +150,13 @@ class LidarARView: ExpoView {
         layer.addSublayer(heatmap.layer)
       }
       heatmap.layer.isHidden = false
+      heatmap.onAutoMaxChanged = { [weak self] maxMeters in
+        guard let self else { return }
+        self.onHeatmapRange([
+          "min": Double(self.heatmap.minMeters),
+          "max": Double(maxMeters),
+        ])
+      }
       rear.onDepthFrame = { [weak self] depthMap in
         self?.heatmap.update(depthMap: depthMap)
       }

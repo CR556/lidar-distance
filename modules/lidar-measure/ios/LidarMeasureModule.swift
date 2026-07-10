@@ -83,7 +83,7 @@ public class LidarMeasureModule: Module {
     }
 
     View(LidarARView.self) {
-      Events("onDistance", "onTrackingState", "onError", "onProjectedPoints")
+      Events("onDistance", "onTrackingState", "onError", "onProjectedPoints", "onHeatmapRange")
 
       Prop("mode") { (view: LidarARView, mode: String) in
         view.setMode(mode)
@@ -115,6 +115,10 @@ public class LidarMeasureModule: Module {
 
       Prop("heatmapRotation") { (view: LidarARView, degrees: Int) in
         view.setHeatmapRotation(degrees)
+      }
+
+      Prop("heatmapAutoRange") { (view: LidarARView, enabled: Bool) in
+        view.setHeatmapAutoRange(enabled)
       }
 
       AsyncFunction("measureAtPoint") { (view: LidarARView, x: Double, y: Double) -> [String: Any]? in

@@ -14,6 +14,7 @@ import {
 } from '../../modules/lidar-measure';
 import { CaptureButton } from '../components/CaptureButton';
 import { HeatmapLegend } from '../components/HeatmapLegend';
+import { RangePickerModal } from '../components/RangePickerModal';
 import { CrosshairOverlay } from '../components/CrosshairOverlay';
 import { DebugOverlay } from '../components/DebugOverlay';
 import { DistanceReadout } from '../components/DistanceReadout';
@@ -21,15 +22,11 @@ import { ModeSwitcher } from '../components/ModeSwitcher';
 import { Chain, ChainPoint, ShapesOverlay } from '../components/ShapesOverlay';
 import { UnitToggle } from '../components/UnitToggle';
 import { useDistanceFeed } from '../hooks/useDistanceFeed';
+import { useHeatmapSettings } from '../hooks/useHeatmapSettings';
 import { useUnits } from '../hooks/useUnits';
 import { buildCaptureMetadata } from '../lib/captureMetadata';
 import { formatArea, perimeter, polygonArea } from '../lib/geometry';
-import {
-  HEATMAP_COLORS,
-  HEATMAP_MAX_METERS,
-  HEATMAP_MIN_METERS,
-  HEATMAP_OPACITY,
-} from '../lib/heatmap';
+import { HEATMAP_COLORS, HEATMAP_MIN_METERS, HEATMAP_OPACITY } from '../lib/heatmap';
 import { projectionStore } from '../lib/projectionStore';
 import { formatDistance } from '../lib/units';
 
@@ -59,6 +56,20 @@ export function MeasureScreen({ frontOnly = false }: Props) {
   const [capturing, setCapturing] = useState(false);
   const [flash, setFlash] = useState(false);
   const shotRef = useRef<View>(null);
+
+  // Heatmap range: auto (tracks furthest object) vs fixed (user-set).
+  const { rangeMode, fixedRange, autoMax, setAutoMax, toggleRangeMode, setEndpoint } =
+    useHeatmapSettings();
+  const [editingEndpoint, setEditingEndpoint] = useState<'min' | 'max' | null>(null);
+  const displayedRange =
+    rangeMode === 'auto' ? { min: HEATMAP_MIN_METERS, max: autoMax } : fixedRange;
+
+  const handleHeatmapRange = useCallback(
+    (e: { nativeEvent: { min: number; max: number } }) => {
+      setAutoMax(e.nativeEvent.max);
+    },
+    [setAutoMax]
+  );
 
   // Shape measuring state (rearTap mode). Per-frame projections live in
   // projectionStore, NOT in state — see that module for why.
@@ -213,7 +224,7 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         mode,
         heatmap:
           mode === 'heatmap'
-            ? { minMeters: HEATMAP_MIN_METERS, maxMeters: HEATMAP_MAX_METERS }
+            ? { minMeters: displayedRange.min, maxMeters: displayedRange.max }
             : undefined,
       });
       await saveImageToPhotos(uri, userComment, description);
@@ -244,13 +255,15 @@ export function MeasureScreen({ frontOnly = false }: Props) {
           updateHz={30}
           smoothing={{ medianWindow: 5, emaAlpha: 0.3 }}
           showNativeMarkers={false}
-          heatmapRange={{ min: HEATMAP_MIN_METERS, max: HEATMAP_MAX_METERS }}
+          heatmapRange={rangeMode === 'auto' ? { min: HEATMAP_MIN_METERS, max: 5 } : fixedRange}
+          heatmapAutoRange={rangeMode === 'auto'}
           heatmapOpacity={HEATMAP_OPACITY}
           heatmapColors={HEATMAP_COLORS}
           onDistance={onDistance}
           onTrackingState={handleTrackingState}
           onError={handleError}
           onProjectedPoints={handleProjectedPoints}
+          onHeatmapRange={handleHeatmapRange}
         />
 
         {mode !== 'front' && (
@@ -258,7 +271,16 @@ export function MeasureScreen({ frontOnly = false }: Props) {
         )}
 
         {/* Inside the capture container so heatmap photos include their scale. */}
-        {mode === 'heatmap' && <HeatmapLegend unit={unit} />}
+        {mode === 'heatmap' && (
+          <HeatmapLegend
+            unit={unit}
+            minMeters={displayedRange.min}
+            maxMeters={displayedRange.max}
+            mode={rangeMode}
+            onToggleMode={toggleRangeMode}
+            onEditEndpoint={setEditingEndpoint}
+          />
+        )}
       </View>
 
       {mode === 'rearTap' && (
@@ -320,6 +342,22 @@ export function MeasureScreen({ frontOnly = false }: Props) {
       )}
 
       {flash && <View style={styles.flash} pointerEvents="none" />}
+
+      <RangePickerModal
+        visible={editingEndpoint !== null}
+        title={editingEndpoint === 'min' ? 'Minimum distance' : 'Maximum distance'}
+        unit={unit}
+        valueMeters={editingEndpoint === 'min' ? fixedRange.min : fixedRange.max}
+        minMeters={editingEndpoint === 'min' ? 0.1 : fixedRange.min + 0.1}
+        maxMeters={editingEndpoint === 'min' ? fixedRange.max - 0.1 : 20}
+        onCancel={() => setEditingEndpoint(null)}
+        onConfirm={(meters) => {
+          if (editingEndpoint) {
+            setEndpoint(editingEndpoint, meters);
+          }
+          setEditingEndpoint(null);
+        }}
+      />
     </View>
   );
 }

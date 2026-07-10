@@ -84,10 +84,14 @@ export type LidarMeasureViewProps = {
   heatmapColors?: string[];
   /** Rotation applied to the sensor-orientation depth map. Default 90. */
   heatmapRotation?: number;
+  /** Auto mode: ramp far end tracks the furthest visible object. */
+  heatmapAutoRange?: boolean;
   onDistance?: (event: { nativeEvent: DistanceEvent }) => void;
   onTrackingState?: (event: { nativeEvent: TrackingStateEvent }) => void;
   onError?: (event: { nativeEvent: MeasureErrorEvent }) => void;
   onProjectedPoints?: (event: { nativeEvent: ProjectedPointsEvent }) => void;
+  /** Fires in heatmap auto mode when the tracked range changes (>5 cm). */
+  onHeatmapRange?: (event: { nativeEvent: { min: number; max: number } }) => void;
   style?: StyleProp<ViewStyle>;
 };
 
